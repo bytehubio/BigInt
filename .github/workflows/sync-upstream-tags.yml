@@ -1,5 +1,4 @@
-# .github/workflows/sync-upstream-tags.yml
-name: Sync upstream tags
+name: Sync upstream TAGS+BRANCHES
 
 on:
   workflow_dispatch:
@@ -7,7 +6,7 @@ on:
     - cron: "0 */6 * * *"
 
 jobs:
-  sync-tags:
+  sync-upstream:
     runs-on: ubuntu-latest
 
     steps:
@@ -15,10 +14,38 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.SYNC_TAGS_TOKEN }}
+          persist-credentials: false
+
+      - name: Configure remotes
+        env:
+          TOKEN: ${{ secrets.SYNC_TAGS_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git remote set-url origin https://x-access-token:${TOKEN}@github.com/bytehubio/BigInt.git
+          git remote add upstream https://github.com/attaswift/BigInt.git
+
+          git fetch origin --prune --tags
+          git fetch upstream --prune --tags
+          git remote set-head upstream -a
+
+      - name: Rebase fork master onto upstream master
+        continue-on-error: true
+        run: |
+          DEFAULT_BRANCH="$(git symbolic-ref --short refs/remotes/upstream/HEAD | sed 's#^upstream/##')"
+
+          git checkout -B "${DEFAULT_BRANCH}" "origin/${DEFAULT_BRANCH}"
+
+          if ! git rebase "upstream/${DEFAULT_BRANCH}"; then
+            git rebase --abort || true
+            echo "::warning::Could not rebase ${DEFAULT_BRANCH} on upstream/${DEFAULT_BRANCH}. Tags sync will still run."
+            exit 0
+          fi
+
+          git push --force-with-lease origin "${DEFAULT_BRANCH}:${DEFAULT_BRANCH}"
 
       - name: Sync tags from upstream
+        if: ${{ always() }}
         run: |
-          git remote add upstream https://github.com/attaswift/BigInt.git
-          git fetch upstream --tags
-          git push https://x-access-token:${{ secrets.SYNC_TAGS_TOKEN }}@github.com/bytehubio/BigInt.git --tags
+          git push origin 'refs/tags/*:refs/tags/*'
